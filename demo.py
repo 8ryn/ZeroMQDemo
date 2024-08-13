@@ -34,7 +34,6 @@ class CompClientTask(threading.Thread):
         print("Client %s started" % (identity))
         poll = zmq.Poller()
         poll.register(socket, zmq.POLLIN)
-        reqs = 0
         # Code making the initial registration with the server:
         print("Client %s sending registration request" % (identity))
         reg_msg = "register"
@@ -53,6 +52,8 @@ class CompClientTask(threading.Thread):
                     # TODO: Various error checking should probably be here really
                     id = int(split_msg[1].decode())
                     self.workersDict[id].call()
+                elif split_msg[0] == b"heartbeat_ping":
+                    socket.send_string("heartbeat_pong")
 
         socket.close()
         context.term()
@@ -63,6 +64,7 @@ class ServerAllInOne:
 
     def __init__(self):
         self.workersDict = {}
+        self.followerAlive: dict[bytes, bool] = {}
         self.registration_thread = threading.Thread(
             target=self.registration_loop, daemon=True
         )
@@ -72,34 +74,40 @@ class ServerAllInOne:
 
     def registration_loop(self):
         context = zmq.Context()
-        server = context.socket(zmq.ROUTER)
-        server.bind("tcp://*:5570")
+        self.server = context.socket(zmq.ROUTER)
+        self.server.bind("tcp://*:5570")
         tprint("Server started")
 
         while True:
-            ident, msg = server.recv_multipart()
+            ident, msg = self.server.recv_multipart()
             tprint("Server received %s from %s" % (msg, ident))
             split_msg = msg.split(b" ")
             if split_msg[0] == b"register":
                 tprint("Registering %s" % (ident))
-                for b_id in split_msg[1:]:
-                    id = int(
-                        b_id.decode()
-                    )  # Converting byte to str to in to int seems non-ideal
-                    worker = demoRemoteWorker(id, server, ident)
-                    # TODO: Probably need a lock here (plan for actual implementation is to have a separate dictionary of workers to be added which are added at end of timing loop to avoid constant locking)
-                    self.workersDict[id] = worker
-                    print("Registered worker %s" % (id))
-                reply = b"registered"
-                server.send_multipart([ident, reply])
-            elif split_msg[0] == b"deregister":
+                if split_msg[1:]:
+                    self.followerAlive[ident] = True
+                    for b_id in split_msg[1:]:
+                        id = int(
+                            b_id.decode()
+                        )  # Converting byte to str to in to int seems non-ideal
+                        worker = demoRemoteWorker(id, self.server, ident)
+                        # TODO: Probably need a lock here (plan for actual implementation is to have a separate dictionary of workers to be added which are added at end of timing loop to avoid constant locking)
+                        self.workersDict[id] = worker
+                        print("Registered worker %s" % (id))
+                    reply = b"registered"
+                    self.server.send_multipart([ident, reply])
+            elif (
+                split_msg[0] == b"deregister"
+            ):  # Currently you could deregister every worker from a follower but would not be removed from followersAlive dict
                 tprint("Deregistering %s" % (ident))
                 for b_id in split_msg[1:]:
                     id = int(b_id.decode())
                     self.workersDict.pop(id)
                     print("Deregistered worker %s" % (id))
                 reply = b"deregistered"
-                server.send_multipart([ident, reply])
+                self.server.send_multipart([ident, reply])
+            elif split_msg[0] == b"heartbeat_pong":
+                self.followerAlive[ident] = True
             else:
                 tprint("Invalid message")
         context.term()
@@ -115,6 +123,14 @@ class ServerAllInOne:
                 remote_worker = random.choice(list(self.workersDict.values()))
                 print("Randomly selected worker %s" % (remote_worker.id))
                 remote_worker.call()
+
+            for ident in self.followerAlive:
+                if not self.followerAlive[ident]:
+                    print("Follower %s not responding" % (ident))
+                    # The heartbeat doesn't currently achieve anything other than alerting that there is an issue but I think that is valuable
+                else:
+                    self.followerAlive[ident] = False
+                self.server.send_multipart([ident, b"heartbeat_ping"])
             time.sleep(5)
 
 
