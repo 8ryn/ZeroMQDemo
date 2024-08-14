@@ -22,7 +22,9 @@ class CompClientTask(threading.Thread):
         threading.Thread.__init__(self)
         self.workersDict = {}
         for i in range(4):
-            worker = demoLocalWorker(self.id * 100 + i)
+            worker = demoLocalWorker(
+                self.id * 100 + i, self.id * 3 + i
+            )  # Period set based on id for demo
             self.workersDict[worker.id] = worker
 
     def run(self):
@@ -39,6 +41,7 @@ class CompClientTask(threading.Thread):
         reg_msg = [b"register"]
         for worker in self.workersDict.values():
             reg_msg.append(str(worker.id).encode())
+            reg_msg.append(str(worker.period).encode())
 
         socket.send_multipart(reg_msg)
 
@@ -85,14 +88,15 @@ class ServerAllInOne:
                 tprint("Registering %s" % (ident))
                 if msg[2:]:
                     self.followerAlive[ident] = True
-                    for b_id in msg[2:]:
+                    for b_id, b_period in zip(msg[2::2], msg[3::2]):
                         id = int(
                             b_id.decode()
                         )  # Converting byte to str to in to int seems non-ideal
-                        worker = demoRemoteWorker(id, self.server, ident)
+                        period = int(b_period.decode())
+                        worker = demoRemoteWorker(id, self.server, ident, period)
                         # TODO: Probably need a lock here (plan for actual implementation is to have a separate dictionary of workers to be added which are added at end of timing loop to avoid constant locking)
                         self.workersDict[id] = worker
-                        print("Registered worker %s" % (id))
+                        print("Registered worker %s with period %s" % (id, period))
                     reply = b"registered"
                     self.server.send_multipart([ident, reply])
             elif (
@@ -135,22 +139,26 @@ class ServerAllInOne:
 
 class demoLocalWorker:
 
-    def __init__(self, id: int) -> None:
+    def __init__(self, id: int, period: int = 60) -> None:
         self.id = id
+        self.period = period
 
     def call(self):
-        print("Local worker called. ID = %s" % (self.id))
+        print("Local worker called. ID = %s Period = %s" % (self.id, self.period))
 
 
 class demoRemoteWorker:
 
-    def __init__(self, id: int, socket: zmq.SyncSocket, ident: bytes) -> None:
+    def __init__(
+        self, id: int, socket: zmq.SyncSocket, ident: bytes, period: int = 60
+    ) -> None:
         self.id = id
         self.socket = socket
         self.ident = ident
+        self.period = period
 
     def call(self):
-        print("Remote worker called. ID = %s" % (self.id))
+        print("Remote worker called. ID = %s Period = %s" % (self.id, self.period))
         msg = [self.ident, b"call", str(self.id).encode()]
         self.socket.send_multipart(msg)
 
