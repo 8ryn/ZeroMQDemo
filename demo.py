@@ -36,23 +36,22 @@ class CompClientTask(threading.Thread):
         poll.register(socket, zmq.POLLIN)
         # Code making the initial registration with the server:
         print("Client %s sending registration request" % (identity))
-        reg_msg = "register"
+        reg_msg = [b"register"]
         for worker in self.workersDict.values():
-            reg_msg += " " + str(worker.id)
+            reg_msg.append(str(worker.id).encode())
 
-        socket.send_string(reg_msg)
+        socket.send_multipart(reg_msg)
 
         while True:
             sockets = dict(poll.poll(1000))
             if socket in sockets:
-                msg = socket.recv()
+                msg = socket.recv_multipart()
                 tprint("Client %s received: %s" % (identity, msg))
-                split_msg = msg.split(b" ")
-                if split_msg[0] == b"call":
+                if msg[0] == b"call":
                     # TODO: Various error checking should probably be here really
-                    id = int(split_msg[1].decode())
+                    id = int(msg[1].decode())
                     self.workersDict[id].call()
-                elif split_msg[0] == b"heartbeat_ping":
+                elif msg[0] == b"heartbeat_ping":
                     socket.send_string("heartbeat_pong")
 
         socket.close()
@@ -79,14 +78,14 @@ class ServerAllInOne:
         tprint("Server started")
 
         while True:
-            ident, msg = self.server.recv_multipart()
+            msg = self.server.recv_multipart()
+            ident = msg[0]
             tprint("Server received %s from %s" % (msg, ident))
-            split_msg = msg.split(b" ")
-            if split_msg[0] == b"register":
+            if msg[1] == b"register":
                 tprint("Registering %s" % (ident))
-                if split_msg[1:]:
+                if msg[2:]:
                     self.followerAlive[ident] = True
-                    for b_id in split_msg[1:]:
+                    for b_id in msg[2:]:
                         id = int(
                             b_id.decode()
                         )  # Converting byte to str to in to int seems non-ideal
@@ -97,16 +96,16 @@ class ServerAllInOne:
                     reply = b"registered"
                     self.server.send_multipart([ident, reply])
             elif (
-                split_msg[0] == b"deregister"
+                msg[1] == b"deregister"
             ):  # Currently you could deregister every worker from a follower but would not be removed from followersAlive dict
                 tprint("Deregistering %s" % (ident))
-                for b_id in split_msg[1:]:
+                for b_id in msg[2:]:
                     id = int(b_id.decode())
                     self.workersDict.pop(id)
                     print("Deregistered worker %s" % (id))
                 reply = b"deregistered"
                 self.server.send_multipart([ident, reply])
-            elif split_msg[0] == b"heartbeat_pong":
+            elif msg[1] == b"heartbeat_pong":
                 self.followerAlive[ident] = True
             else:
                 tprint("Invalid message")
@@ -152,9 +151,8 @@ class demoRemoteWorker:
 
     def call(self):
         print("Remote worker called. ID = %s" % (self.id))
-        msg = "call " + str(self.id)
-        msg_bytes = msg.encode()
-        self.socket.send_multipart([self.ident, msg_bytes])
+        msg = [self.ident, b"call", str(self.id).encode()]
+        self.socket.send_multipart(msg)
 
 
 def main():
