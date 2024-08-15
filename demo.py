@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 import random
+from datetime import datetime, timezone
 
 
 def tprint(msg):
@@ -53,7 +54,8 @@ class CompClientTask(threading.Thread):
                 if msg[0] == b"call":
                     # TODO: Various error checking should probably be here really
                     id = int(msg[1].decode())
-                    self.workersDict[id].call()
+                    timestamp = datetime.fromisoformat(msg[2].decode())
+                    self.workersDict[id].call(timestamp)
                 elif msg[0] == b"heartbeat_ping":
                     socket.send_string("heartbeat_pong")
 
@@ -125,7 +127,8 @@ class ServerAllInOne:
             if self.workersDict:
                 remote_worker = random.choice(list(self.workersDict.values()))
                 print("Randomly selected worker %s" % (remote_worker.id))
-                remote_worker.call()
+                calltime = datetime.now(timezone.utc)
+                remote_worker.call(calltime)
 
             for ident in self.followerAlive:
                 if not self.followerAlive[ident]:
@@ -143,8 +146,11 @@ class demoLocalWorker:
         self.id = id
         self.period = period
 
-    def call(self):
-        print("Local worker called. ID = %s Period = %s" % (self.id, self.period))
+    def call(self, timestamp: datetime):
+        print(
+            "Local worker called. Timestamp = %s ID = %s Period = %s"
+            % (timestamp, self.id, self.period)
+        )
 
 
 class demoRemoteWorker:
@@ -157,9 +163,12 @@ class demoRemoteWorker:
         self.ident = ident
         self.period = period
 
-    def call(self):
-        print("Remote worker called. ID = %s Period = %s" % (self.id, self.period))
-        msg = [self.ident, b"call", str(self.id).encode()]
+    def call(self, time: datetime):
+        print(
+            "Remote worker called at time %s. ID = %s Period = %s"
+            % (time, self.id, self.period)
+        )
+        msg = [self.ident, b"call", str(self.id).encode(), time.isoformat().encode()]
         self.socket.send_multipart(msg)
 
 
