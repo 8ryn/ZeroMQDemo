@@ -79,7 +79,7 @@ class ServerAllInOne:
     def registration_loop(self):
         context = zmq.Context()
         self.server = context.socket(zmq.ROUTER)
-        self.server.bind("tcp://*:5570")
+        self.server.bind("tcp://localhost:5570")
         tprint("Server started")
 
         while True:
